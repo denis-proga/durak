@@ -1,0 +1,38 @@
+# --- Python / бэкенд ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+db.sqlite3
+
+# --- Node / фронтенд ---
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+
+# --- Секреты ---
+# .env хранит ключи и адреса — в репозиторий он попадать не должен.
+# Файл .env.production специально НЕ игнорируется: в нём только публичный
+# адрес бэкенда, и он нужен Cloudflare при сборке.
+.env
+.env.local
+.env.*.local
+
+# --- Редакторы ---
+.idea/
+.vscode/
+*.swp
+
+# --- ОС ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Логи ---
+*.log
+npm-debug.log*
+yarn-error.log*
