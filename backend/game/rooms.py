@@ -132,6 +132,8 @@ class Room:
     levels: dict[str, int] = field(default_factory=dict)  # ступень лестницы погонов
     games_played: int = 0
     result_recorded: bool = False
+    # Проигравший прошлой партии — по правилам следующую он открывает сам.
+    last_loser_name: Optional[str] = None
 
     # ---------- Лобби ----------
 
@@ -199,6 +201,7 @@ class Room:
             players=[(s.pid, s.name) for s in self.seats],
             translatable=self.translatable,
             pair_defense=self.pair_defense,
+            forced_first_attacker=self._resolve_forced_attacker(),
         )
 
     def restart_game(self) -> None:
@@ -214,7 +217,15 @@ class Room:
             players=[(s.pid, s.name) for s in self.seats],
             translatable=self.translatable,
             pair_defense=self.pair_defense,
+            forced_first_attacker=self._resolve_forced_attacker(),
         )
+
+    def _resolve_forced_attacker(self) -> Optional[str]:
+        """pid места проигравшего прошлую партию — по нику, если он всё ещё за столом."""
+        if not self.last_loser_name:
+            return None
+        seat = self.seat_by_name(self.last_loser_name)
+        return seat.pid if seat else None
 
     # ---------- Статистика и погоны ----------
 
@@ -238,6 +249,7 @@ class Room:
         seat = self.seat_by_pid(loser.pid)
         name = seat.name if seat else loser.name
         self.losses[name] = self.losses.get(name, 0) + 1
+        self.last_loser_name = name
 
         result = {
             "loser": name,

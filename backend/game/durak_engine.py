@@ -109,6 +109,7 @@ class DurakGame:
         translatable: bool = True,
         pair_defense: bool = False,
         seed: Optional[int] = None,
+        forced_first_attacker: Optional[str] = None,
     ):
         if not 2 <= len(players) <= 6:
             raise ValueError("Игроков должно быть от 2 до 6")
@@ -150,7 +151,7 @@ class DurakGame:
         self.last_taken: Optional[tuple[str, list[Card]]] = None
 
         self._deal_initial()
-        self.attacker_index = self._choose_first_attacker()
+        self.attacker_index = self._choose_first_attacker(forced_first_attacker)
         self.defender_index = self._next_active(self.attacker_index)
         self._recalc_bout_limit()
 
@@ -161,8 +162,16 @@ class DurakGame:
             for p in self.players:
                 p.hand.append(self.deck.pop())
 
-    def _choose_first_attacker(self) -> int:
-        """Ходит тот, у кого самый младший козырь. Если козырей нет — первый игрок."""
+    def _choose_first_attacker(self, forced_pid: Optional[str] = None) -> int:
+        """
+        Обычно ходит тот, у кого самый младший козырь.
+        Но если задан forced_pid (проигравший прошлой партии — по правилам
+        первым ходит на дурака он), используем его, если он вообще есть за столом.
+        """
+        if forced_pid:
+            for i, p in enumerate(self.players):
+                if p.pid == forced_pid:
+                    return i
         best_idx, best_val = None, None
         for i, p in enumerate(self.players):
             for c in p.hand:
@@ -427,14 +436,15 @@ class DurakGame:
         «Движок готовности»: игрок говорит «я всё выкинул, играйте дальше».
         Пока движок включён, он ждёт остальных. Если кто-то подкинет карту,
         движок сбрасывается — можно передумать и подкинуть ещё, либо включить снова.
-        В парном режиме движка нет: команда кидает свободно.
+        Работает и в парном режиме: партнёры включают готовность каждый за себя,
+        иначе не было бы способа закрыть заход после взятия карт.
         """
         self._require_running()
-        if self.pair_defense:
-            raise IllegalMove("В парном режиме движок готовности не используется")
         player = self.player_by_id(pid)
         if player is self.defender:
             raise IllegalMove("Защищающийся не пасует — он либо отбивается, либо берёт")
+        if not self.can_throw_in(player):
+            raise IllegalMove("Сейчас не твоя очередь подкидывать")
         if not self.table:
             raise IllegalMove("Заход ещё не начался")
         self.passed.add(pid)
@@ -464,12 +474,9 @@ class DurakGame:
 
     def everyone_passed(self) -> bool:
         """
-        Заход можно закрывать, когда все, кто мог подкинуть, включили движок.
-        В парном режиме движка нет — считаем заход законченным, когда
-        у команды атакующего просто не осталось подходящих карт.
+        Заход можно закрывать, когда все, кто мог подкинуть, включили движок
+        готовности — это правило одинаковое и в обычном, и в парном режиме.
         """
-        if self.pair_defense:
-            return all(not self.legal_throw_ins(p.pid) for p in self.throwers())
         return all(p.pid in self.passed for p in self.throwers())
 
     def all_beaten(self) -> bool:
@@ -631,7 +638,7 @@ class DurakGame:
             "rules": {
                 "translatable": self.translatable,
                 "pair_defense": self.pair_defense,
-                "has_ready_toggle": not self.pair_defense,
+                "has_ready_toggle": True,
             },
             "players": [p.to_public_dict() for p in self.players],
             "my_hand": [c.to_dict() for c in me.hand] if me else [],

@@ -1352,6 +1352,9 @@ function TableScreen({ state, actions, error, connectionStatus, onExit }) {
   const iAmReady = (game.passed || []).includes(myPid);
   const paused = game.paused;
   const finished = game.phase === 'finished';
+  // Игрок сбросил все карты и вышел из партии — он больше не участвует
+  // в текущей раздаче, только наблюдает за оставшимися.
+  const iAmOut = game.players.find((p) => p.pid === myPid)?.is_out === true;
 
   const cardRefs = useRef([]);
   const [selectedIndex, setSelectedIndex] = useState(null);
@@ -1417,6 +1420,10 @@ function TableScreen({ state, actions, error, connectionStatus, onExit }) {
     const gapLocal =
       (game.gap_index - myServerIndex + game.players.length) % game.players.length;
 
+    // реальное место защищающегося — сервер уже пропускает вышедших игроков
+    // при выборе следующего, поэтому это может быть НЕ соседнее место
+    const defenderLocalIdx = players.findIndex((p) => p.pid === game.defender);
+
     // Кто забрал карты — берём ИЗ СОБЫТИЯ сервера, а не из defender_took:
     // сервер выполняет взятие и закрытие захода одним сообщением, поэтому
     // флаг defender_took до клиента в положении true просто не доезжает.
@@ -1425,7 +1432,7 @@ function TableScreen({ state, actions, error, connectionStatus, onExit }) {
     const takerLocalIdx = tookNow ? players.findIndex((p) => p.pid === ev.taker) : -1;
     const takerPos = takerLocalIdx >= 0 ? api.seatPosition?.(takerLocalIdx) : null;
 
-    api.syncTable(game.table, gapLocal, fromPos, takerPos);
+    api.syncTable(game.table, gapLocal, fromPos, takerPos, defenderLocalIdx >= 0 ? defenderLocalIdx : null);
 
     // стол опустел — показываем «БИТО» только если карты действительно отбили
     if (prevTableLen.current > 0 && game.table.length === 0) {
@@ -1456,6 +1463,7 @@ function TableScreen({ state, actions, error, connectionStatus, onExit }) {
   }, [game.table, game.gap_index, game.deck_count, game.attacker, myServerIndex, sceneVersion, state.last_event]);
 
   // показ козыря другим игроком
+  const trumpBannerTimeoutRef = useRef(null);
   useEffect(() => {
     const ev = state.last_event;
     if (ev?.kind === 'show_trump' && ev.card) {
@@ -1464,11 +1472,21 @@ function TableScreen({ state, actions, error, connectionStatus, onExit }) {
         by: ev.by,
         red: ev.card.suit === '♥' || ev.card.suit === '♦',
       });
-      const t = setTimeout(() => setShownTrumpCard(null), 2400);
-      return () => clearTimeout(t);
+      // Раньше здесь была очистка через return () => clearTimeout(t) — но эффект
+      // перезапускается на КАЖДОЕ новое сообщение сервера, и если событие
+      // приходило раньше, чем истекали 2.4с, таймер отменялся, а баннер
+      // так и оставался висеть до конца игры. Теперь таймер не зависит
+      // от последующих обновлений и всегда успевает сработать.
+      clearTimeout(trumpBannerTimeoutRef.current);
+      trumpBannerTimeoutRef.current = setTimeout(() => setShownTrumpCard(null), 2400);
+    } else if (ev?.kind === 'bout_over' || ev?.kind === 'game_over' || ev?.kind === 'start' || ev?.kind === 'restart') {
+      clearTimeout(trumpBannerTimeoutRef.current);
+      setShownTrumpCard(null);
     }
-    return undefined;
   }, [state.last_event]);
+
+  // На случай смены партии/выхода из комнаты баннер не должен пережить размонтирование
+  useEffect(() => () => clearTimeout(trumpBannerTimeoutRef.current), []);
 
   const toggleReady = useCallback(() => {
     if (iAmReady) actions.unready();
@@ -1711,6 +1729,45 @@ function TableScreen({ state, actions, error, connectionStatus, onExit }) {
       }
       return { index: i, angle: gapAngle, center: new THREE.Vector3(cx, 0.26, cz), slots, cards: [] };
     });
+
+    // ---- Динамическая зона: строится под РЕАЛЬНУЮ пару атакующий-защищающийся ----
+    // Раньше зона бралась из фиксированного массива по месту атакующего, и если
+    // сосед справа от него вышел из игры, зона всё равно рисовалась у ЕГО места,
+    // а не там, где реально сидит защищающийся. Теперь угол зоны — это середина
+    // дуги между двумя РЕАЛЬНЫМИ участниками розыгрыша, кто бы ни выбыл между ними.
+    const zoneCache = new Map();
+    const seatAngleOf = (seatIdx) => -(seatIdx / PLAYER_COUNT) * Math.PI * 2;
+
+    function buildZoneAt(gapAngle) {
+      const cx = Math.sin(gapAngle) * R_GAP;
+      const cz = Math.cos(gapAngle) * R_GAP;
+      const slots = [];
+      const tangentX = Math.cos(gapAngle);
+      const tangentZ = -Math.sin(gapAngle);
+      const radialX = Math.sin(gapAngle);
+      const radialZ = Math.cos(gapAngle);
+      for (let row = 0; row < 2; row++) {
+        for (let col = 0; col < 3; col++) {
+          const t = (col - 1) * 0.58;
+          const r = row === 0 ? 0.38 : -0.38;
+          slots.push(new THREE.Vector3(cx + tangentX * t + radialX * r, 0.26, cz + tangentZ * t + radialZ * r));
+        }
+      }
+      return { angle: gapAngle, center: new THREE.Vector3(cx, 0.26, cz), slots, cards: [] };
+    }
+
+    function getDynamicZone(attackerSeat, defenderSeat) {
+      const key = `${attackerSeat}:${defenderSeat}`;
+      if (zoneCache.has(key)) return zoneCache.get(key);
+      const a1 = seatAngleOf(attackerSeat);
+      const a2 = seatAngleOf(defenderSeat);
+      let diff = a2 - a1;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      const zone = buildZoneAt(a1 + diff / 2);
+      zoneCache.set(key, zone);
+      return zone;
+    }
 
     // пунктирная разметка слотов
     const zoneOutlines = [];
@@ -2013,11 +2070,12 @@ function TableScreen({ state, actions, error, connectionStatus, onExit }) {
 
     // takenBy: позиция игрока, забравшего карты. Если задана — карты летят
     // ему в руки, а не в отбой. Иначе это обычное «бито».
-    sceneApiRef.current.syncTable = (tableState, gapIdx, seatOfPid, takenBy) => {
-      const zoneIndex = ((gapIdx % PLAYER_COUNT) + PLAYER_COUNT) % PLAYER_COUNT;
-      const zone = GAP_ZONES[zoneIndex];
+    // defenderIdx: место РЕАЛЬНОГО защищающегося (может быть не соседним,
+    // если между ним и атакующим кто-то вышел из игры).
+    sceneApiRef.current.syncTable = (tableState, gapIdx, seatOfPid, takenBy, defenderIdx) => {
+      const zone = getDynamicZone(gapIdx, defenderIdx != null ? defenderIdx : (gapIdx + 1) % PLAYER_COUNT);
       if (!zone) return;
-      activeGapIndex = zoneIndex;
+      activeGapIndex = gapIdx;
 
       // Смещение карты защиты считаем В СИСТЕМЕ КООРДИНАТ ЗОНЫ, а не мира —
       // иначе при другом угле зоны карта уезжала куда попало вместо того,
@@ -2896,8 +2954,33 @@ function TableScreen({ state, actions, error, connectionStatus, onExit }) {
         </div>
       )}
 
+      {/* Ты вышел из партии — просто наблюдаешь за остальными */}
+      {!standing && !paused && !finished && iAmOut && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: isMobile ? 96 : 118,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            padding: isMobile ? '7px 16px' : '9px 20px',
+            borderRadius: 999,
+            background: 'rgba(47,107,71,0.85)',
+            border: '1.5px solid #7FD3A1',
+            color: '#EAFBF0',
+            fontSize: isMobile ? 11.5 : 13,
+            fontWeight: 600,
+            fontFamily: "'Inter', sans-serif",
+            textAlign: 'center',
+            zIndex: 25,
+            pointerEvents: 'none',
+          }}
+        >
+          Ты закончил — расслабься и наблюдай! 🍃
+        </div>
+      )}
+
       {/* Действия: зависят от того, атакуешь ты или защищаешься */}
-      {!standing && !paused && !finished && (
+      {!standing && !paused && !finished && !iAmOut && (
         <div
           style={{
             position: 'absolute',
@@ -3074,7 +3157,7 @@ function TableScreen({ state, actions, error, connectionStatus, onExit }) {
         hoverIndex={hoverIndex}
         onCardPointerDown={onCardPointerDown}
         cardRefs={cardRefs}
-        disabled={standing || paused || finished}
+        disabled={standing || paused || finished || iAmOut}
         legalKeys={legalKeys}
         iAmDefender={iAmDefender}
         isMobile={isMobile}
@@ -3130,10 +3213,14 @@ function HandOverlay({
 }) {
   // На телефоне рука должна помещаться по ширине даже при 8+ картах,
   // поэтому карты сжимаются и накладываются друг на друга веером.
+  // Если карт стало МНОГО (взял вместо отбоя), фиксированного сжатия мало —
+  // карты за краем экрана были попросту недоступны. Добавляем горизонтальную
+  // прокрутку как страховку сверху сжатия.
   const count = Math.max(hand.length, 1);
-  const cardW = isMobile ? Math.max(34, Math.min(48, Math.floor((window.innerWidth - 40) / count) - 2)) : 52;
+  const cardW = isMobile ? Math.max(30, Math.min(48, Math.floor((window.innerWidth - 40) / count) - 2)) : 52;
   const cardH = Math.round(cardW * 1.42);
-  const overlap = isMobile && count > 6 ? -6 : isMobile ? 3 : 8;
+  const overlap = isMobile && count > 6 ? -8 : isMobile ? 3 : 8;
+  const needsScroll = isMobile && count > 11; // сжатие уже упёрлось в минимум
   return (
     <div
       style={{
@@ -3142,11 +3229,17 @@ function HandOverlay({
         left: 0,
         right: 0,
         display: 'flex',
-        justifyContent: 'center',
+        justifyContent: needsScroll ? 'flex-start' : 'center',
+        overflowX: needsScroll ? 'auto' : 'visible',
+        overflowY: 'hidden',
+        WebkitOverflowScrolling: 'touch',
         gap: overlap,
         padding: isMobile ? '10px 8px 12px' : '18px 12px 22px',
         background: 'linear-gradient(0deg, rgba(0,0,0,0.6), transparent)',
-        touchAction: 'none',
+        // 'none' полностью запрещал бы браузерный скролл — при большой руке
+        // разрешаем горизонтальный пан, вертикальный свайп-бросок это не ломает,
+        // потому что распознаётся он по вертикальному движению.
+        touchAction: needsScroll ? 'pan-x' : 'none',
         opacity: disabled ? 0.4 : 1,
         pointerEvents: disabled ? 'none' : 'auto',
         filter: disabled ? 'grayscale(0.6)' : 'none',
