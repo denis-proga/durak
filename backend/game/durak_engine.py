@@ -150,6 +150,15 @@ class DurakGame:
         self.loser: Optional[Player] = None
         # что и кому досталось в последнем взятии — по этим картам считается погон
         self.last_taken: Optional[tuple[str, list[Card]]] = None
+        # Был ли этот заход "чистым" взятием (защищающийся ничего не успел
+        # отбить до того, как взял) — по дворовым правилам погон цепляется
+        # только с чистого захода. Если ты уже отбил часть карт (в т.ч. своим
+        # козырем!) и лишь потом взял остаток, эта карта возвращается тебе
+        # ВМЕСТЕ со всем столом (правило взятия — берёшь всё целиком), но
+        # засчитывать её как повод для погона нельзя: твой козырь был победой,
+        # а не проигрышем, и не должен задним числом превращаться в улику.
+        self.last_taken_clean: bool = True
+        self._bout_had_beat: bool = False
         # уникальный id партии — фронт по нему понимает, что стол нужно
         # полностью пересобрать, а не доверять старым ключам слотов
         self.game_id: str = uuid.uuid4().hex[:8]
@@ -366,6 +375,7 @@ class DurakGame:
 
         player.hand.remove(card)
         slot.defense = card
+        self._bout_had_beat = True
 
     def translate(self, pid: str, card: Card) -> None:
         """
@@ -521,6 +531,12 @@ class DurakGame:
                     self.defender.hand.append(slot.defense)
                     taken.append(slot.defense)
             self.last_taken = (self.defender.pid, taken)
+            # "Чистое" взятие — если за этот заход защищающийся ничего
+            # не успел отбить до того, как забрал остальное. Если часть карт
+            # (в т.ч. своей козырной) уже была отбита, а взял он лишь то,
+            # что не смог, это смешанный заход — на погон он не считается,
+            # даже если козырь при взятии вернулся ему в руку.
+            self.last_taken_clean = not self._bout_had_beat
             # взявший пропускает ход: атакует следующий за ним
             next_attacker = self._next_active(self.defender_index)
         else:
@@ -531,6 +547,7 @@ class DurakGame:
             # отбился — сам становится атакующим
             next_attacker = self.defender_index
 
+        self._bout_had_beat = False  # готовимся к следующему заходу
         self.table.clear()
         self.passed.clear()
         self.trump_shown_by.clear()
@@ -610,6 +627,7 @@ class DurakGame:
                     taken.append(slot.defense)
             loser.hand.extend(taken)
             self.last_taken = (loser.pid, taken)
+            self.last_taken_clean = not self._bout_had_beat
         self.table.clear()
         self.phase = Phase.FINISHED
         self.loser = loser

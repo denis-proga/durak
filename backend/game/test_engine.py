@@ -378,3 +378,77 @@ check("атакует игрок, сидящий перед проигравши
 g_fallback = DurakGame(players4, seed=1, forced_first_defender="not-at-table")
 check("если проигравшего больше нет — обычный выбор атакующего",
       g_fallback.attacker.pid != "not-at-table" and g_fallback.defender.pid != "not-at-table")
+
+print("\n=== Погон не цепляется, если часть карт этого захода уже отбита ===")
+# Ровно сценарий пользователя: две карты отбиты (одна — козырной шестёркой),
+# затем подкинута третья карта — обычная шестёрка, которую не отбили.
+# По правилу взятия защищающийся забирает ВЕСЬ стол, включая уже отбитые пары —
+# значит козырная шестёрка возвращается ему в руку. Но погон это не должно
+# засчитывать: заход был "смешанным" (уже был успешный отбой до взятия).
+#
+# Реалистичная последовательность (подкидывать можно только совпадающим
+# достоинством — ЛИБО атаки, ЛИБО уже сыгранной защиты):
+#   карта 1: атакующий кидает 7♠ — защищающийся бьёт 8♠ (та же масть, старше)
+#   карта 2: атакующий кидает 8♥ (ранг 8 уже на столе) — защищающийся бьёт
+#            козырной 6♦ (козырь бьёт любую некозырную карту, даже младше)
+#   карта 3: атакующий кидает 6♣ (ранг 6 теперь на столе — это же и есть
+#            козырь, которым только что отбились) — защищающийся отбить не может
+gc = DurakGame(players4, seed=61)
+gc.trump_suit = "♦"
+atk, dfn = gc.attacker, gc.defender
+
+atk.hand = [C2("7", "♠"), C2("8", "♥"), C2("6", "♣")]
+dfn.hand = [C2("8", "♠"), C2("6", "♦"), C2("9", "♥")]
+gc._recalc_bout_limit()
+
+gc.attack_with(atk.pid, C2("7", "♠"))
+gc.defend_with(dfn.pid, 0, C2("8", "♠"))
+check("первая карта отбита", gc.table[0].is_beaten)
+
+gc.attack_with(atk.pid, C2("8", "♥"))
+gc.defend_with(dfn.pid, 1, C2("6", "♦"))  # козырная шестёрка бьёт восьмёрку
+check("вторая карта отбита козырем", gc.table[1].is_beaten)
+
+gc.attack_with(atk.pid, C2("6", "♣"))
+check("на столе три карты, третья не отбита", len(gc.table) == 3 and not gc.table[2].is_beaten)
+
+gc.take(dfn.pid)
+gc.resolve_bout()
+
+check("взятие отмечено как НЕ чистое", gc.last_taken_clean is False)
+check("защищающийся забрал весь стол, включая свой козырь",
+      C2("6", "♦") in dfn.hand and C2("6", "♣") in dfn.hand)
+
+room_pid_map = {p.pid: p.name for p in gc.players}
+matching_taken = gc.last_taken[1] if gc.last_taken else []
+check("среди взятых карт есть обе шестёрки (это и вводило в заблуждение)",
+      sum(1 for c in matching_taken if c.rank == "6") == 2)
+
+# Эмулируем то, что делает Room.record_result — тот же вызов evaluate_epaulette,
+# но теперь он должен быть заблокирован флагом last_taken_clean
+import os, sys
+sys.path.insert(0, '/home/claude/backend')
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "durak_server.settings")
+import django
+django.setup()
+from game.rooms import evaluate_epaulette
+
+# Старое (неверное) поведение для сравнения: без проверки last_taken_clean
+naive_outcome = evaluate_epaulette(0, matching_taken, "♦")
+check("без фикса это ошибочно засчиталось бы погоном", naive_outcome is not None)
+check("но game.last_taken_clean корректно помечает заход как нечистый",
+      gc.last_taken_clean is False)
+
+print("\n=== Чистое взятие по-прежнему засчитывается нормально ===")
+gc2 = DurakGame(players4, seed=71)
+gc2.trump_suit = "♣"
+atk2, dfn2 = gc2.attacker, gc2.defender
+atk2.hand = [C2("6", "♠")]
+dfn2.hand = [C2("A", "♦")]
+gc2._recalc_bout_limit()
+gc2.attack_with(atk2.pid, C2("6", "♠"))
+gc2.take(dfn2.pid)
+gc2.resolve_bout()
+check("взятие с нуля (ничего не отбивал) отмечено как чистое", gc2.last_taken_clean is True)
+outcome2 = evaluate_epaulette(0, gc2.last_taken[1], "♣")
+check("и погон в этом случае честно засчитывается", outcome2 is not None and outcome2["new_level"] == 1)

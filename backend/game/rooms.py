@@ -268,6 +268,20 @@ class Room:
             result.update(epaulette_for(self.levels.get(name, 0)))
             return result
 
+        # Заход должен быть "чистым": если проигравший уже успел что-то
+        # отбить в этом же заходе (в т.ч. собственным козырем), а потом
+        # добрал остаток — это смешанный заход. Правило по-дворовому:
+        # твоя удачная защита не должна задним числом стать погоном,
+        # даже если карта физически вернулась к тебе в руку при взятии.
+        if not self.game.last_taken_clean:
+            level = self.levels.get(name, 0)
+            result["reason"] = (
+                "Погон не засчитан — в этом заходе ты уже успел отбиться, "
+                "а взял лишь остаток (например, вернул свой же козырь)"
+            )
+            result.update(epaulette_for(level))
+            return result
+
         level = self.levels.get(name, 0)
         outcome = evaluate_epaulette(level, taken_info[1], self.game.trump_suit)
 
