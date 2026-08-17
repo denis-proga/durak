@@ -1305,8 +1305,6 @@ function TableScreen({ state, actions, error, connectionStatus, onExit }) {
   const gyroState = useRef({ supported: false, calibrated: false, gamma0: 0, beta0: 0, dYaw: 0, dPitch: 0, targetYaw: 0, targetPitch: 0 });
   const dragState = useRef({ dragging: false, lastX: 0, lastY: 0, isThrow: false });
   const throwStart = useRef({ x: 0, y: 0 });
-  const [needsGyroPermission, setNeedsGyroPermission] = useState(false);
-  const [gyroActive, setGyroActive] = useState(false);
 
   const game = state.game;
   const myPid = state.me;
@@ -1588,56 +1586,14 @@ function TableScreen({ state, actions, error, connectionStatus, onExit }) {
     throwStart.current = { x: e.clientX, y: e.clientY };
   }, []);
 
-  useEffect(() => {
-    const needsPerm =
-      typeof window !== 'undefined' &&
-      typeof window.DeviceOrientationEvent !== 'undefined' &&
-      typeof window.DeviceOrientationEvent.requestPermission === 'function';
-    setNeedsGyroPermission(needsPerm);
-  }, []);
-
-  const handleOrientation = useCallback((e) => {
-    if (e.gamma === null || e.beta === null) return;
-    const g = gyroState.current;
-    if (!g.calibrated) {
-      g.gamma0 = e.gamma;
-      g.beta0 = e.beta;
-      g.calibrated = true;
-    }
-    const rawYaw = e.gamma - g.gamma0; // влево-вправо
-    const rawPitch = e.beta - g.beta0; // вверх-вниз
-    const clamp = (v, m) => Math.max(-m, Math.min(m, v));
-    g.targetYaw = THREE.MathUtils.degToRad(clamp(rawYaw, 65));
-    g.targetPitch = THREE.MathUtils.degToRad(clamp(-rawPitch, 48));
-  }, []);
-
-  const enableGyro = useCallback(async () => {
-    try {
-      if (
-        typeof window.DeviceOrientationEvent !== 'undefined' &&
-        typeof window.DeviceOrientationEvent.requestPermission === 'function'
-      ) {
-        const res = await window.DeviceOrientationEvent.requestPermission();
-        if (res !== 'granted') return;
-      }
-      gyroState.current.supported = true;
-      gyroState.current.calibrated = false;
-      window.addEventListener('deviceorientation', handleOrientation);
-      setGyroActive(true);
-      setNeedsGyroPermission(false);
-    } catch (err) {
-      // недоступно — останется управление мышью/пальцем
-    }
-  }, [handleOrientation]);
-
-  useEffect(() => {
-    if (!needsGyroPermission && typeof window !== 'undefined' && window.DeviceOrientationEvent) {
-      gyroState.current.supported = true;
-      window.addEventListener('deviceorientation', handleOrientation);
-      setGyroActive(true);
-    }
-    return () => window.removeEventListener('deviceorientation', handleOrientation);
-  }, [needsGyroPermission, handleOrientation]);
+  // ---- Гироскоп ОТКЛЮЧЁН намеренно ----
+  // На Android датчики ориентации часто дают дёрганые/неоткалиброванные
+  // значения (в отличие от iOS, где либо разрешение не выдано и включался
+  // тот же плавный свайв пальцем, либо сенсор стабильнее). Чтобы поведение
+  // было ОДИНАКОВЫМ на всех телефонах и совпадало с управлением мышью на
+  // ноуте, камера теперь поворачивается ТОЛЬКО пальцем/мышью — везде один
+  // и тот же код (onPointerMove ниже), без зависимости от кривых сенсоров.
+  const handleOrientation = useCallback(() => {}, []);
 
   useEffect(() => {
     const mount = mountRef.current;
