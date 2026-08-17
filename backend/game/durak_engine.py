@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import random
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -109,7 +110,7 @@ class DurakGame:
         translatable: bool = True,
         pair_defense: bool = False,
         seed: Optional[int] = None,
-        forced_first_attacker: Optional[str] = None,
+        forced_first_defender: Optional[str] = None,
     ):
         if not 2 <= len(players) <= 6:
             raise ValueError("Игроков должно быть от 2 до 6")
@@ -149,10 +150,12 @@ class DurakGame:
         self.loser: Optional[Player] = None
         # что и кому досталось в последнем взятии — по этим картам считается погон
         self.last_taken: Optional[tuple[str, list[Card]]] = None
+        # уникальный id партии — фронт по нему понимает, что стол нужно
+        # полностью пересобрать, а не доверять старым ключам слотов
+        self.game_id: str = uuid.uuid4().hex[:8]
 
         self._deal_initial()
-        self.attacker_index = self._choose_first_attacker(forced_first_attacker)
-        self.defender_index = self._next_active(self.attacker_index)
+        self.attacker_index, self.defender_index = self._choose_first_pair(forced_first_defender)
         self._recalc_bout_limit()
 
     # ---------- Раздача ----------
@@ -162,22 +165,30 @@ class DurakGame:
             for p in self.players:
                 p.hand.append(self.deck.pop())
 
-    def _choose_first_attacker(self, forced_pid: Optional[str] = None) -> int:
+    def _choose_first_pair(self, forced_defender_pid: Optional[str] = None) -> tuple[int, int]:
         """
-        Обычно ходит тот, у кого самый младший козырь.
-        Но если задан forced_pid (проигравший прошлой партии — по правилам
-        первым ходит на дурака он), используем его, если он вообще есть за столом.
+        Обычно атакует тот, у кого самый младший козырь, а защищается следующий
+        по очереди за столом.
+
+        Но если задан forced_defender_pid — это проигравший прошлой партии.
+        По правилам «ходят на дурака»: именно ОН защищается первым, а атакует
+        тот, кто сидит перед ним по ходу игры (т.е. следующий активный игрок
+        назад по кругу становится атакующим на этот первый заход).
         """
-        if forced_pid:
+        if forced_defender_pid:
             for i, p in enumerate(self.players):
-                if p.pid == forced_pid:
-                    return i
+                if p.pid == forced_defender_pid:
+                    defender_idx = i
+                    attacker_idx = self._prev_active(defender_idx)
+                    return attacker_idx, defender_idx
+
         best_idx, best_val = None, None
         for i, p in enumerate(self.players):
             for c in p.hand:
                 if c.suit == self.trump_suit and (best_val is None or c.value < best_val):
                     best_idx, best_val = i, c.value
-        return best_idx if best_idx is not None else 0
+        attacker_idx = best_idx if best_idx is not None else 0
+        return attacker_idx, self._next_active(attacker_idx)
 
     # ---------- Навигация по игрокам ----------
 
@@ -193,6 +204,14 @@ class DurakGame:
         n = len(self.players)
         for step in range(1, n + 1):
             cand = (index + step) % n
+            if not self.players[cand].is_out:
+                return cand
+        return index
+
+    def _prev_active(self, index: int) -> int:
+        n = len(self.players)
+        for step in range(1, n + 1):
+            cand = (index - step) % n
             if not self.players[cand].is_out:
                 return cand
         return index
@@ -652,4 +671,5 @@ class DurakGame:
             ),
             "can_throw_in": bool(me and self.can_throw_in(me)),
             "loser": self.loser.pid if self.loser else None,
+            "game_id": self.game_id,
         }

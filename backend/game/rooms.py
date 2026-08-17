@@ -201,7 +201,7 @@ class Room:
             players=[(s.pid, s.name) for s in self.seats],
             translatable=self.translatable,
             pair_defense=self.pair_defense,
-            forced_first_attacker=self._resolve_forced_attacker(),
+            forced_first_defender=self._resolve_forced_defender(),
         )
 
     def restart_game(self) -> None:
@@ -217,11 +217,15 @@ class Room:
             players=[(s.pid, s.name) for s in self.seats],
             translatable=self.translatable,
             pair_defense=self.pair_defense,
-            forced_first_attacker=self._resolve_forced_attacker(),
+            forced_first_defender=self._resolve_forced_defender(),
         )
 
-    def _resolve_forced_attacker(self) -> Optional[str]:
-        """pid места проигравшего прошлую партию — по нику, если он всё ещё за столом."""
+    def _resolve_forced_defender(self) -> Optional[str]:
+        """
+        pid проигравшего прошлую партию — по правилам он «ходит на дурака»,
+        то есть ЗАЩИЩАЕТСЯ первым в новой партии. Если его уже нет за столом,
+        играем обычным порядком (младший козырь).
+        """
         if not self.last_loser_name:
             return None
         seat = self.seat_by_name(self.last_loser_name)

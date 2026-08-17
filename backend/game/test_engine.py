@@ -360,3 +360,21 @@ if passed2 < total2:
     for name, ok in results:
         if not ok:
             print(f"  - {name}")
+
+print("\n=== Проигравший ЗАЩИЩАЕТСЯ первым в следующей партии ===")
+# Важно: раньше по ошибке проигравший становился АТАКУЮЩИМ — это неверно,
+# по правилам «ходят на дурака», то есть он отбивается первым.
+g_forced = DurakGame(players4, seed=1, forced_first_defender="p2")
+check("проигравший назначен защищающимся", g_forced.defender.pid == "p2")
+check("проигравший НЕ атакующий", g_forced.attacker.pid != "p2")
+# атакующий — тот, кто сидит перед ним по кругу (следующий активный назад)
+expected_attacker_idx = g_forced._prev_active(
+    next(i for i, p in enumerate(g_forced.players) if p.pid == "p2")
+)
+check("атакует игрок, сидящий перед проигравшим",
+      g_forced.attacker_index == expected_attacker_idx)
+
+# если форсированного игрока больше нет за столом — обычная логика (младший козырь)
+g_fallback = DurakGame(players4, seed=1, forced_first_defender="not-at-table")
+check("если проигравшего больше нет — обычный выбор атакующего",
+      g_fallback.attacker.pid != "not-at-table" and g_fallback.defender.pid != "not-at-table")

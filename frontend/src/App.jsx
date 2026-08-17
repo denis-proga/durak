@@ -1402,9 +1402,17 @@ function TableScreen({ state, actions, error, connectionStatus, onExit }) {
   }, [state.lobby?.waiting]);
 
   // ---- Синхронизация 3D-сцены с состоянием сервера ----
+  const prevGameId = useRef(null);
   useEffect(() => {
     const api = sceneApiRef.current;
     if (!api.syncTable) return;
+
+    // Новая партия (в том числе «Ещё партию») — старый стол нужно снести
+    // полностью, иначе карты прошлой раздачи копятся горой на новой.
+    if (game.game_id && prevGameId.current !== null && prevGameId.current !== game.game_id) {
+      api.resetTable?.();
+    }
+    prevGameId.current = game.game_id ?? prevGameId.current;
 
     // настоящий козырь и реальный остаток колоды
     if (game.trump_card) {
@@ -2068,6 +2076,21 @@ function TableScreen({ state, actions, error, connectionStatus, onExit }) {
 
     const cardKey = (slotIdx, role) => `${slotIdx}:${role}`;
 
+    // Новая партия — старые ключи слотов ("0:a", "1:a"...) снова используются
+    // с нуля, поэтому синхронизация по ключам считает их "уже показанными"
+    // и старые карты с прошлой партии просто оставались висеть на столе,
+    // накапливаясь горой. Явно чистим сцену при смене game_id.
+    sceneApiRef.current.resetTable = () => {
+      for (const mesh of shownCards.values()) {
+        scene.remove(mesh);
+        if (mesh.geometry) mesh.geometry.dispose();
+      }
+      shownCards.clear();
+      // и все карты, ещё летящие в анимации — они из прошлой партии
+      flyingCards.length = 0;
+      activeGapIndex = null;
+    };
+
     // takenBy: позиция игрока, забравшего карты. Если задана — карты летят
     // ему в руки, а не в отбой. Иначе это обычное «бито».
     // defenderIdx: место РЕАЛЬНОГО защищающегося (может быть не соседним,
@@ -2236,7 +2259,11 @@ function TableScreen({ state, actions, error, connectionStatus, onExit }) {
     // ---- Какую карту на столе игрок сейчас «целит» пальцем ----
     // Проецируем неотбитые карты на экран и ищем ближайшую к пальцу.
     // Благодаря этому можно бить карты в любом порядке, а не только слева направо.
-    sceneApiRef.current.slotUnderPointer = (screenX, screenY, maxDist = 150) => {
+    // ВАЖНО: порога расстояния больше нет — раньше, если палец оказывался
+    // дальше 150px от любой карты, подсветка молча не срабатывала, и игра
+    // тихо била "первый неотбитый слот по порядку" — это и было причиной
+    // жалобы "бьётся не та карта, требует определённый порядок".
+    sceneApiRef.current.slotUnderPointer = (screenX, screenY) => {
       let best = null;
       let bestDist = Infinity;
       for (const [key, mesh] of shownCards.entries()) {
@@ -2254,7 +2281,9 @@ function TableScreen({ state, actions, error, connectionStatus, onExit }) {
           best = { slotIndex: slotIdx, screenX: sx, screenY: sy, dist: d };
         }
       }
-      return best && best.dist <= maxDist ? best : null;
+      // Всегда возвращаем ближайшую карту, если хоть одна есть на столе —
+      // а не только если попал точно рядом.
+      return best;
     };
 
     // подсветка выбранной для отбоя карты
