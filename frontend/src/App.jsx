@@ -1992,6 +1992,11 @@ function TableScreen({ state, actions, error, connectionStatus, onExit }) {
     // ---- ОТБОЙ: все карты со стола уезжают в сброс ----
     const DISCARD_POS = new THREE.Vector3(-1.35, 0.24, 1.15);
     let discardCount = 0;
+    // Все карты, когда-либо улетевшие в сброс — resetTable должен их видеть.
+    // Раньше карты в отбое сразу выпадали из shownCards (как только заход
+    // закрывался) и больше нигде не отслеживались, поэтому переживали смену
+    // партии и накапливались горой при каждом «Ещё партию».
+    const discardMeshes = [];
 
     sceneApiRef.current.sweepToDiscard = () => {
       const zones = activeGapIndex !== null ? [GAP_ZONES[activeGapIndex]] : GAP_ZONES;
@@ -2042,6 +2047,15 @@ function TableScreen({ state, actions, error, connectionStatus, onExit }) {
         if (mesh.geometry) mesh.geometry.dispose();
       }
       shownCards.clear();
+      // куча сброса с прошлой партии — вот она и оставалась висеть,
+      // потому что карты уходили из shownCards в момент отправки в отбой
+      // и больше нигде не отслеживались
+      for (const mesh of discardMeshes) {
+        scene.remove(mesh);
+        if (mesh.geometry) mesh.geometry.dispose();
+      }
+      discardMeshes.length = 0;
+      discardCount = 0;
       // и все карты, ещё летящие в анимации — они из прошлой партии
       flyingCards.length = 0;
       activeGapIndex = null;
@@ -2195,6 +2209,7 @@ function TableScreen({ state, actions, error, connectionStatus, onExit }) {
           target.y += discardCount * 0.004;
           target.x += (Math.random() - 0.5) * 0.06;
           target.z += (Math.random() - 0.5) * 0.06;
+          discardMeshes.push(mesh);
           flyingCards.push({
             mesh,
             start: mesh.position.clone(),
